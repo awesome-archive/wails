@@ -1,5 +1,5 @@
 <p align="center" style="text-align: center">
-   <img src="https://github.com/wailsapp/docs/raw/master/.vuepress/public/media/logo_cropped.png" width="40%"><br/>
+   <img src="logo_cropped.png" width="40%"><br/>
 </p>
 <p align="center">
    A framework for building desktop applications using Go & Web Technologies.<br/><br/>
@@ -16,6 +16,8 @@
 
 The traditional method of providing web interfaces to Go programs is via a built-in web server. Wails offers a different approach: it provides the ability to wrap both Go code and a web frontend into a single binary. Tools are provided to make this easy for you by handling project creation, compilation and bundling. All you have to do is get creative!
 
+The official docs can be found at [https://wails.app](https://wails.app).
+
 ## Features
 
 - Use standard Go libraries/frameworks for the backend
@@ -28,9 +30,6 @@ The traditional method of providing web interfaces to Go programs is via a built
 - Powerful cli tool
 - Multiplatform
 
-## Project Status
-
-Wails is currently in Beta. Please make sure you read the [Project Status](https://wails.app/project_status.html) if you are interested in using this project.
 
 ## Installation
 
@@ -47,19 +46,41 @@ Make sure you have the xcode command line tools installed. This can be done by r
 
 ### Linux
 
-#### Ubuntu 18.04, Debian 9
+#### Debian/Ubuntu
 
-`sudo apt install pkg-config build-essential libgtk-3-dev libwebkit2gtk-4.0-dev`
+`sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev`
+
+_Debian: 8, 9, 10_
+
+_Ubuntu: 16.04, 18.04, 19.04_
+
+_Also succesfully tested on: Zorin 15, Parrot 4.7, Linuxmint 19, Elementary 5, Kali, Neon_
 
 #### Arch Linux
 
 `sudo pacman -S webkit2gtk gtk3`
 
-#### Red Hat Based Distros
+_Also succesfully test on: Manjaro & ArcoLinux_
 
-`sudo yum install webkit2gtk-devel gtk3-devel`
+#### Centos
 
-Note: If you have successfully installed these dependencies on a different flavour of Linux, please consider submitting a PR.
+`sudo yum install webkitgtk3-devel gtk3-devel`
+
+_CentOS 6, 7_
+
+#### Fedora
+
+`sudo yum install webkit2gtk3-devel gtk3-devel`
+
+_Fedora 29, 30_
+
+#### VoidLinux & VoidLinux-musl
+
+`xbps-install gtk+3-devel webkit2gtk-devel`
+
+#### Gentoo
+
+`sudo emerge gtk+:3 webkit-gtk`
 
 ### Windows
 
@@ -72,7 +93,7 @@ Windows requires gcc and related tooling. The recommended download is from [http
 Installation is as simple as running the following command:
 
 <pre style='color:white'>
-go get github.com/wailsapp/wails/cmd/wails
+go get -u github.com/wailsapp/wails/cmd/wails
 </pre>
 
 ## Next Steps
@@ -104,8 +125,7 @@ And without [these people](CONTRIBUTORS.md), it wouldn't be what it is today. A 
 
 Special Mentions:
 
-  * [Bill Kennedy](https://twitter.com/goinggodotnet) - Go guru, encourager and all-round nice guy, whose infectious energy and inspiration powered me on when I had none left.
-  * [Mark Bates](https://github.com/markbates) - Creator of [Packr](https://github.com/gobuffalo/packr), inspiration for packing strategies which fed into some of the tooling.
+  * [Byron](https://github.com/bh90210) - At times, Byron has single handedly kept this project alive. Without his incredible input, we never would have got to v1.
 
 This project was mainly coded to the following albums:
 
