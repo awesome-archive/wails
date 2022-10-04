@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,12 +42,65 @@ To help you in this process, we will ask for some information, add Go/Wails deta
 			gomodule = "(Not Set)"
 		}
 
+		// get version numbers for GCC, node & npm
+		program := cmd.NewProgramHelper()
+		// string helpers
+		var gccVersion, nodeVersion, npmVersion string
+
+		// choose between OS (mac,linux,win)
+		switch runtime.GOOS {
+		case "darwin":
+			gcc := program.FindProgram("gcc")
+			if gcc != nil {
+				stdout, _, _, _ := gcc.Run("-dumpversion")
+				gccVersion = strings.TrimSpace(stdout)
+			}
+		case "linux":
+			// for linux we have to collect
+			// the distribution name
+			distroInfo := cmd.GetLinuxDistroInfo()
+			linuxDB := cmd.NewLinuxDB()
+			distro := linuxDB.GetDistro(distroInfo.ID)
+			release := distro.GetRelease(distroInfo.Release)
+			gccVersionCommand := release.GccVersionCommand
+
+			gcc := program.FindProgram("gcc")
+			if gcc != nil {
+				stdout, _, _, _ := gcc.Run(gccVersionCommand)
+				gccVersion = strings.TrimSpace(stdout)
+			}
+		case "windows":
+			gcc := program.FindProgram("gcc")
+			if gcc != nil {
+				stdout, _, _, _ := gcc.Run("-dumpversion")
+				gccVersion = strings.TrimSpace(stdout)
+			}
+		}
+
+		npm := program.FindProgram("npm")
+		if npm != nil {
+			stdout, _, _, _ := npm.Run("--version")
+			npmVersion = stdout
+			npmVersion = npmVersion[:len(npmVersion)-1]
+			npmVersion = strings.TrimSpace(npmVersion)
+		}
+
+		node := program.FindProgram("node")
+		if node != nil {
+			stdout, _, _, _ := node.Run("--version")
+			nodeVersion = stdout
+			nodeVersion = nodeVersion[:len(nodeVersion)-1]
+		}
+
 		str.WriteString("\n| Name   | Value |\n| ----- | ----- |\n")
 		str.WriteString(fmt.Sprintf("| Wails Version | %s |\n", cmd.Version))
 		str.WriteString(fmt.Sprintf("| Go Version    | %s |\n", runtime.Version()))
 		str.WriteString(fmt.Sprintf("| Platform      | %s |\n", runtime.GOOS))
 		str.WriteString(fmt.Sprintf("| Arch          | %s |\n", runtime.GOARCH))
 		str.WriteString(fmt.Sprintf("| GO111MODULE   | %s |\n", gomodule))
+		str.WriteString(fmt.Sprintf("| GCC           | %s |\n", gccVersion))
+		str.WriteString(fmt.Sprintf("| Npm           | %s |\n", npmVersion))
+		str.WriteString(fmt.Sprintf("| Node          | %s |\n", nodeVersion))
 
 		fmt.Println()
 		fmt.Println("Processing template and preparing for upload.")
@@ -59,7 +112,7 @@ To help you in this process, we will ask for some information, add Go/Wails deta
 			os.Exit(1)
 		}
 		defer resp.Body.Close()
-		template, _ := ioutil.ReadAll(resp.Body)
+		template, _ := io.ReadAll(resp.Body)
 		body := string(template)
 		body = "**Description**\n" + (strings.Split(body, "**Description**")[1])
 		fullURL := "https://github.com/wailsapp/wails/issues/new?"

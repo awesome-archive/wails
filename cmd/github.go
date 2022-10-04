@@ -3,7 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"sort"
 )
@@ -18,17 +18,17 @@ func NewGitHubHelper() *GitHubHelper {
 }
 
 // GetVersionTags gets the list of tags on the Wails repo
-// It retuns a list of sorted tags in descending order
+// It returns a list of sorted tags in descending order
 func (g *GitHubHelper) GetVersionTags() ([]*SemanticVersion, error) {
 
 	result := []*SemanticVersion{}
 	var err error
 
-	resp, err := http.Get("https://api.github.com/repos/wailsapp/wails/tags")
+	resp, err := http.Get("https://api.github.com/repos/wailsapp/wails/releases")
 	if err != nil {
 		return result, err
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return result, err
 	}

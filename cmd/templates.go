@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/template"
 
@@ -29,6 +30,26 @@ type TemplateMetadata struct {
 	Bridge               string                `json:"bridge"`
 	WailsDir             string                `json:"wailsdir"`
 	TemplateDependencies []*TemplateDependency `json:"dependencies,omitempty"`
+
+	// List of platforms that this template is supported on.
+	// No value means all platforms. A platform name is the same string
+	// as `runtime.GOOS` will return, eg: "darwin". NOTE: This is
+	// case sensitive.
+	Platforms []string `json:"platforms,omitempty"`
+}
+
+// PlatformSupported returns true if this template supports the
+// currently running platform
+func (m *TemplateMetadata) PlatformSupported() bool {
+
+	// Default is all platforms supported
+	if len(m.Platforms) == 0 {
+		return true
+	}
+
+	// Check that the platform is in the list
+	platformsSupported := slicer.String(m.Platforms)
+	return platformsSupported.Contains(runtime.GOOS)
 }
 
 // TemplateDependency defines a binary dependency for the template
@@ -67,7 +88,7 @@ func NewTemplateHelper() *TemplateHelper {
 	}
 }
 
-// IsValidTemplate returns true if the given tempalte name resides on disk
+// IsValidTemplate returns true if the given template name resides on disk
 func (t *TemplateHelper) IsValidTemplate(templateName string) bool {
 	pathToTemplate := filepath.Join(t.templateDir.fullPath, templateName)
 	return t.fs.DirExists(pathToTemplate)
@@ -104,7 +125,7 @@ func (t *TemplateHelper) LoadMetadata(dir string) (*TemplateMetadata, error) {
 	if !t.fs.FileExists(templateFile) {
 		return nil, nil
 	}
-	rawJSON, err := ioutil.ReadFile(templateFile)
+	rawJSON, err := os.ReadFile(templateFile)
 	if err != nil {
 		return nil, err
 	}
@@ -128,11 +149,11 @@ func (t *TemplateHelper) GetTemplateDetails() (map[string]*TemplateDetails, erro
 		result[name] = &TemplateDetails{
 			Path: dir,
 		}
-		_ = &TemplateMetadata{}
 		metadata, err := t.LoadMetadata(dir)
 		if err != nil {
 			return nil, err
 		}
+
 		result[name].Metadata = metadata
 		if metadata.Name != "" {
 			result[name].Name = metadata.Name

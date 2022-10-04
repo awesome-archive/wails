@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"image"
-	"io/ioutil"
+	"image/png"
 	"os"
 	"path"
 	"path/filepath"
@@ -14,21 +16,24 @@ import (
 	"time"
 
 	"github.com/jackmordaunt/icns"
+	"golang.org/x/image/draw"
 )
 
 // PackageHelper helps with the 'wails package' command
 type PackageHelper struct {
-	fs     *FSHelper
-	log    *Logger
-	system *SystemHelper
+	platform string
+	fs       *FSHelper
+	log      *Logger
+	system   *SystemHelper
 }
 
 // NewPackageHelper creates a new PackageHelper!
-func NewPackageHelper() *PackageHelper {
+func NewPackageHelper(platform string) *PackageHelper {
 	return &PackageHelper{
-		fs:     NewFSHelper(),
-		log:    NewLogger(),
-		system: NewSystemHelper(),
+		platform: platform,
+		fs:       NewFSHelper(),
+		log:      NewLogger(),
+		system:   NewSystemHelper(),
 	}
 }
 
@@ -53,6 +58,111 @@ func newPlistData(title, exe, packageID, version, author string) *plistData {
 	}
 }
 
+type windowsIcoHeader struct {
+	_          uint16
+	imageType  uint16
+	imageCount uint16
+}
+
+type windowsIcoDescriptor struct {
+	width   uint8
+	height  uint8
+	colours uint8
+	_       uint8
+	planes  uint16
+	bpp     uint16
+	size    uint32
+	offset  uint32
+}
+
+type windowsIcoContainer struct {
+	Header windowsIcoDescriptor
+	Data   []byte
+}
+
+func generateWindowsIcon(pngFilename string, iconfile string) error {
+	sizes := []int{256, 128, 64, 48, 32, 16}
+
+	pngfile, err := os.Open(pngFilename)
+	if err != nil {
+		return err
+	}
+	defer pngfile.Close()
+
+	pngdata, err := png.Decode(pngfile)
+	if err != nil {
+		return err
+	}
+
+	icons := []windowsIcoContainer{}
+
+	for _, size := range sizes {
+		rect := image.Rect(0, 0, int(size), int(size))
+		rawdata := image.NewRGBA(rect)
+		scale := draw.CatmullRom
+		scale.Scale(rawdata, rect, pngdata, pngdata.Bounds(), draw.Over, nil)
+
+		icondata := new(bytes.Buffer)
+		writer := bufio.NewWriter(icondata)
+		err = png.Encode(writer, rawdata)
+		if err != nil {
+			return err
+		}
+		writer.Flush()
+
+		imgSize := size
+		if imgSize >= 256 {
+			imgSize = 0
+		}
+
+		data := icondata.Bytes()
+
+		icn := windowsIcoContainer{
+			Header: windowsIcoDescriptor{
+				width:  uint8(imgSize),
+				height: uint8(imgSize),
+				planes: 1,
+				bpp:    32,
+				size:   uint32(len(data)),
+			},
+			Data: data,
+		}
+		icons = append(icons, icn)
+	}
+
+	outfile, err := os.Create(iconfile)
+	if err != nil {
+		return err
+	}
+	defer outfile.Close()
+
+	ico := windowsIcoHeader{
+		imageType:  1,
+		imageCount: uint16(len(sizes)),
+	}
+	err = binary.Write(outfile, binary.LittleEndian, ico)
+	if err != nil {
+		return err
+	}
+
+	offset := uint32(6 + 16*len(sizes))
+	for _, icon := range icons {
+		icon.Header.offset = offset
+		err = binary.Write(outfile, binary.LittleEndian, icon.Header)
+		if err != nil {
+			return err
+		}
+		offset += icon.Header.size
+	}
+	for _, icon := range icons {
+		_, err = outfile.Write(icon.Data)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func defaultString(val string, defaultVal string) string {
 	if val != "" {
 		return val
@@ -63,29 +173,30 @@ func defaultString(val string, defaultVal string) string {
 func (b *PackageHelper) getPackageFileBaseDir() string {
 	// Calculate template base dir
 	_, filename, _, _ := runtime.Caller(1)
-	return filepath.Join(path.Dir(filename), "packages", runtime.GOOS)
+	return filepath.Join(path.Dir(filename), "packages", b.platform)
 }
 
 // Package the application into a platform specific package
 func (b *PackageHelper) Package(po *ProjectOptions) error {
-	switch runtime.GOOS {
+	switch b.platform {
 	case "darwin":
-		// Check we have the exe
-		if !b.fs.FileExists(po.BinaryName) {
-			return fmt.Errorf("cannot bundle non-existent binary file '%s'. Please build with 'wails build' first", po.BinaryName)
-		}
 		return b.packageOSX(po)
 	case "windows":
-		return b.PackageWindows(po, false)
+		return b.PackageWindows(po, true)
 	case "linux":
-		return fmt.Errorf("linux is not supported at this time. Please see https://github.com/wailsapp/wails/issues/2")
+		return b.packageLinux(po)
 	default:
-		return fmt.Errorf("platform '%s' not supported for bundling yet", runtime.GOOS)
+		return fmt.Errorf("platform '%s' not supported for bundling yet", b.platform)
 	}
+}
+
+func (b *PackageHelper) packageLinux(po *ProjectOptions) error {
+	return nil
 }
 
 // Package the application for OSX
 func (b *PackageHelper) packageOSX(po *ProjectOptions) error {
+	build := path.Join(b.fs.Cwd(), "build")
 
 	system := NewSystemHelper()
 	config, err := system.LoadConfig()
@@ -100,39 +211,68 @@ func (b *PackageHelper) packageOSX(po *ProjectOptions) error {
 	packageID := strings.Join([]string{"wails", name, version}, ".")
 	plistData := newPlistData(name, exe, packageID, version, author)
 	appname := po.Name + ".app"
+	plistFilename := path.Join(build, appname, "Contents", "Info.plist")
+	customPlist := path.Join(b.fs.Cwd(), "info.plist")
 
 	// Check binary exists
-	source := path.Join(b.fs.Cwd(), exe)
-	if !b.fs.FileExists(source) {
-		// We need to build!
-		return fmt.Errorf("Target '%s' not available. Has it been compiled yet?", exe)
+	source := path.Join(build, exe)
+	if po.CrossCompile == true {
+		file, err := b.fs.FindFile(build, "darwin")
+		if err != nil {
+			return err
+		}
+		source = path.Join(build, file)
 	}
 
+	if !b.fs.FileExists(source) {
+		// We need to build!
+		return fmt.Errorf("Target '%s' not available. Has it been compiled yet?", source)
+	}
 	// Remove the existing package
 	os.RemoveAll(appname)
 
-	exeDir := path.Join(b.fs.Cwd(), appname, "/Contents/MacOS")
+	// Create directories
+	exeDir := path.Join(build, appname, "/Contents/MacOS")
 	b.fs.MkDirs(exeDir, 0755)
-	resourceDir := path.Join(b.fs.Cwd(), appname, "/Contents/Resources")
+	resourceDir := path.Join(build, appname, "/Contents/Resources")
 	b.fs.MkDirs(resourceDir, 0755)
-	tmpl := template.New("infoPlist")
-	plistFile := filepath.Join(b.getPackageFileBaseDir(), "info.plist")
-	infoPlist, err := ioutil.ReadFile(plistFile)
-	if err != nil {
-		return err
-	}
-	tmpl.Parse(string(infoPlist))
 
-	// Write the template to a buffer
-	var tpl bytes.Buffer
-	err = tmpl.Execute(&tpl, plistData)
-	if err != nil {
-		return err
-	}
-	filename := path.Join(b.fs.Cwd(), appname, "Contents", "Info.plist")
-	err = ioutil.WriteFile(filename, tpl.Bytes(), 0644)
-	if err != nil {
-		return err
+	// Do we have a custom plist in the project directory?
+	if !fs.FileExists(customPlist) {
+
+		// No - create a new plist from our defaults
+		tmpl := template.New("infoPlist")
+		plistFile := filepath.Join(b.getPackageFileBaseDir(), "info.plist")
+		infoPlist, err := os.ReadFile(plistFile)
+		if err != nil {
+			return err
+		}
+		tmpl.Parse(string(infoPlist))
+
+		// Write the template to a buffer
+		var tpl bytes.Buffer
+		err = tmpl.Execute(&tpl, plistData)
+		if err != nil {
+			return err
+		}
+
+		// Save to the package
+		err = os.WriteFile(plistFilename, tpl.Bytes(), 0644)
+		if err != nil {
+			return err
+		}
+
+		// Also write to project directory for customisation
+		err = os.WriteFile(customPlist, tpl.Bytes(), 0644)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Yes - we have a plist. Copy it to the package verbatim
+		err = fs.CopyFile(customPlist, plistFilename)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Copy executable
@@ -150,22 +290,39 @@ func (b *PackageHelper) packageOSX(po *ProjectOptions) error {
 	return err
 }
 
+// CleanWindows removes any windows related files found in the directory
+func (b *PackageHelper) CleanWindows(po *ProjectOptions) {
+	pdir := b.fs.Cwd()
+	basename := strings.TrimSuffix(po.BinaryName, ".exe")
+	exts := []string{".ico", ".exe.manifest", ".rc", "-res.syso"}
+	rsrcs := []string{}
+	for _, ext := range exts {
+		rsrcs = append(rsrcs, filepath.Join(pdir, basename+ext))
+	}
+	b.fs.RemoveFiles(rsrcs, true)
+}
+
 // PackageWindows packages the application for windows platforms
 func (b *PackageHelper) PackageWindows(po *ProjectOptions, cleanUp bool) error {
+	outputDir := b.fs.Cwd()
 	basename := strings.TrimSuffix(po.BinaryName, ".exe")
 
-	// Copy icon
-	tgtIconFile := filepath.Join(b.fs.Cwd(), basename+".ico")
-	if !b.fs.FileExists(tgtIconFile) {
-		srcIconfile := filepath.Join(b.getPackageFileBaseDir(), "wails.ico")
-		err := b.fs.CopyFile(srcIconfile, tgtIconFile)
+	// Copy default icon if needed
+	icon, err := b.copyIcon()
+	if err != nil {
+		return err
+	}
+
+	// Generate icon from PNG if it doesn't exist
+	if !fs.FileExists(basename + ".ico") {
+		err = generateWindowsIcon(icon, basename+".ico")
 		if err != nil {
 			return err
 		}
 	}
 
 	// Copy manifest
-	tgtManifestFile := filepath.Join(b.fs.Cwd(), basename+".exe.manifest")
+	tgtManifestFile := filepath.Join(outputDir, basename+".exe.manifest")
 	if !b.fs.FileExists(tgtManifestFile) {
 		srcManifestfile := filepath.Join(b.getPackageFileBaseDir(), "wails.exe.manifest")
 		err := b.fs.CopyFile(srcManifestfile, tgtManifestFile)
@@ -175,41 +332,52 @@ func (b *PackageHelper) PackageWindows(po *ProjectOptions, cleanUp bool) error {
 	}
 
 	// Copy rc file
-	tgtRCFile := filepath.Join(b.fs.Cwd(), basename+".rc")
+	tgtRCFile := filepath.Join(outputDir, basename+".rc")
 	if !b.fs.FileExists(tgtRCFile) {
 		srcRCfile := filepath.Join(b.getPackageFileBaseDir(), "wails.rc")
-		rcfilebytes, err := ioutil.ReadFile(srcRCfile)
+		rcfilebytes, err := os.ReadFile(srcRCfile)
 		if err != nil {
 			return err
 		}
 		rcfiledata := strings.Replace(string(rcfilebytes), "$NAME$", basename, -1)
-		err = ioutil.WriteFile(tgtRCFile, []byte(rcfiledata), 0755)
+		err = os.WriteFile(tgtRCFile, []byte(rcfiledata), 0755)
 		if err != nil {
 			return err
 		}
 	}
 
 	// Build syso
-	sysofile := filepath.Join(b.fs.Cwd(), basename+"-res.syso")
-	windresCommand := []string{"windres", "-o", sysofile, tgtRCFile}
-	err := NewProgramHelper().RunCommandArray(windresCommand)
-	if err != nil {
-		return err
-	}
+	sysofile := filepath.Join(outputDir, basename+"-res.syso")
 
-	// clean up
-	if cleanUp {
-		filesToDelete := []string{tgtIconFile, tgtManifestFile, tgtRCFile, sysofile}
-		err := b.fs.RemoveFiles(filesToDelete)
+	// cross-compile
+	if b.platform != runtime.GOOS {
+		args := []string{
+			"docker", "run", "--rm",
+			"-v", outputDir + ":/build",
+			"--entrypoint", "/bin/sh",
+			"wailsapp/xgo:1.16.3",
+			"-c", "/usr/bin/x86_64-w64-mingw32-windres -o /build/" + basename + "-res.syso /build/" + basename + ".rc",
+		}
+		if err := NewProgramHelper().RunCommandArray(args); err != nil {
+			return err
+		}
+	} else {
+		batfile, err := fs.LocalDir(".")
+		if err != nil {
+			return err
+		}
+
+		windresBatFile := filepath.Join(batfile.fullPath, "windres.bat")
+		windresCommand := []string{windresBatFile, sysofile, tgtRCFile}
+		err = NewProgramHelper().RunCommandArray(windresCommand)
 		if err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
-func (b *PackageHelper) copyIcon(resourceDir string) (string, error) {
+func (b *PackageHelper) copyIcon() (string, error) {
 
 	// TODO: Read this from project.json
 	const appIconFilename = "appicon.png"
@@ -220,11 +388,11 @@ func (b *PackageHelper) copyIcon(resourceDir string) (string, error) {
 
 		// Install default icon
 		iconfile := filepath.Join(b.getPackageFileBaseDir(), "icon.png")
-		iconData, err := ioutil.ReadFile(iconfile)
+		iconData, err := os.ReadFile(iconfile)
 		if err != nil {
 			return "", err
 		}
-		err = ioutil.WriteFile(srcIcon, iconData, 0644)
+		err = os.WriteFile(srcIcon, iconData, 0644)
 		if err != nil {
 			return "", err
 		}
@@ -234,7 +402,7 @@ func (b *PackageHelper) copyIcon(resourceDir string) (string, error) {
 
 func (b *PackageHelper) packageIconOSX(resourceDir string) error {
 
-	srcIcon, err := b.copyIcon(resourceDir)
+	srcIcon, err := b.copyIcon()
 	if err != nil {
 		return err
 	}

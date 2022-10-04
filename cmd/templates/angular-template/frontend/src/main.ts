@@ -1,3 +1,4 @@
+import 'core-js/stable';
 import { enableProdMode } from '@angular/core';
 import { platformBrowserDynamic } from '@angular/platform-browser-dynamic';
 
@@ -6,13 +7,13 @@ import { environment } from './environments/environment';
 
 import 'zone.js'
 
-import Bridge from './wailsbridge';
+import * as Wails from '@wailsapp/runtime';
 
 if (environment.production) {
   enableProdMode();
 }
 
-Bridge.Start(() => {
+Wails.Init(() => {
   platformBrowserDynamic().bootstrapModule(AppModule)
     .catch(err => console.error(err));
 });

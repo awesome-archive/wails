@@ -3,14 +3,12 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"time"
-
-	homedir "github.com/mitchellh/go-homedir"
 )
 
 // SystemHelper - Defines everything related to the system
@@ -38,10 +36,11 @@ func NewSystemHelper() *SystemHelper {
 // setSystemDirs calculates the system directories it is interested in
 func (s *SystemHelper) setSystemDirs() {
 	var err error
-	s.homeDir, err = homedir.Dir()
+	s.homeDir, err = os.UserHomeDir()
 	if err != nil {
 		log.Fatal("Cannot find home directory! Please file a bug report!")
 	}
+
 	// TODO: A better config system
 	s.wailsSystemDir = filepath.Join(s.homeDir, ".wails")
 	s.wailsSystemConfig = filepath.Join(s.wailsSystemDir, s.configFilename)
@@ -99,11 +98,16 @@ func (s *SystemHelper) setup() error {
 
 	if config.Name != "" {
 		systemConfig["name"] = PromptRequired("What is your name", config.Name)
+	} else if n, err := getGitConfigValue("user.name"); err == nil && n != "" {
+		systemConfig["name"] = PromptRequired("What is your name", n)
 	} else {
 		systemConfig["name"] = PromptRequired("What is your name")
 	}
+
 	if config.Email != "" {
 		systemConfig["email"] = PromptRequired("What is your email address", config.Email)
+	} else if e, err := getGitConfigValue("user.email"); err == nil && e != "" {
+		systemConfig["email"] = PromptRequired("What is your email address", e)
 	} else {
 		systemConfig["email"] = PromptRequired("What is your email address")
 	}
@@ -119,7 +123,7 @@ func (s *SystemHelper) setup() error {
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(s.wailsSystemConfig, configData, 0755)
+	err = os.WriteFile(s.wailsSystemConfig, configData, 0755)
 	if err != nil {
 		return err
 	}
@@ -132,7 +136,7 @@ func (s *SystemHelper) setup() error {
 }
 
 const introText = `
-Wails is a lightweight framework for creating web-like desktop apps in Go. 
+Wails is a lightweight framework for creating web-like desktop apps in Go.
 I'll need to ask you a few questions so I can fill in your project templates and then I will try and see if you have the correct dependencies installed. If you don't have the right tools installed, I'll try and suggest how to install them.
 `
 
@@ -180,7 +184,7 @@ func (s *SystemHelper) Initialise() error {
 	return s.setup()
 }
 
-// SystemConfig - Defines system wode configuration data
+// SystemConfig - Defines system wide configuration data
 type SystemConfig struct {
 	Name  string `json:"name"`
 	Email string `json:"email"`
@@ -202,11 +206,11 @@ func (sc *SystemConfig) Save(filename string) error {
 	}
 
 	// Write it out to the config file
-	return ioutil.WriteFile(filename, theJSON, 0644)
+	return os.WriteFile(filename, theJSON, 0644)
 }
 
 func (sc *SystemConfig) load(filename string) error {
-	configData, err := ioutil.ReadFile(filename)
+	configData, err := os.ReadFile(filename)
 	if err != nil {
 		return err
 	}
@@ -269,44 +273,41 @@ func CheckDependencies(logger *Logger) (bool, error) {
 		if err != nil {
 			return false, err
 		}
+
+		var libraryChecker CheckPkgInstalled
 		distroInfo := GetLinuxDistroInfo()
+
+		switch distroInfo.Distribution {
+		case Ubuntu, Debian, Zorin, Parrot, Linuxmint, Elementary, Kali, Neon, Deepin, Raspbian, PopOS, Uos:
+			libraryChecker = DpkgInstalled
+		case Arch, ArcoLinux, ArchLabs, Ctlos, Manjaro, ManjaroARM, EndeavourOS, ArtixLinux:
+			libraryChecker = PacmanInstalled
+		case CentOS, Fedora, Tumbleweed, Leap, RHEL:
+			libraryChecker = RpmInstalled
+		case Gentoo:
+			libraryChecker = EqueryInstalled
+		case VoidLinux:
+			libraryChecker = XbpsInstalled
+		case Solus:
+			libraryChecker = EOpkgInstalled
+		case Crux:
+			libraryChecker = PrtGetInstalled
+		case NixOS:
+			libraryChecker = NixEnvInstalled
+		default:
+			return false, RequestSupportForDistribution(distroInfo)
+		}
+
 		for _, library := range *requiredLibraries {
-			switch distroInfo.Distribution {
-			case Ubuntu, Debian:
-				installed, err := DpkgInstalled(library.Name)
-				if err != nil {
-					return false, err
-				}
-				if !installed {
-					errors = true
-					logger.Error("Library '%s' not found. %s", library.Name, library.Help)
-				} else {
-					logger.Green("Library '%s' installed.", library.Name)
-				}
-			case Arch:
-				installed, err := PacmanInstalled(library.Name)
-				if err != nil {
-					return false, err
-				}
-				if !installed {
-					errors = true
-					logger.Error("Library '%s' not found. %s", library.Name, library.Help)
-				} else {
-					logger.Green("Library '%s' installed.", library.Name)
-				}
-			case RedHat:
-				installed, err := RpmInstalled(library.Name)
-				if err != nil {
-					return false, err
-				}
-				if !installed {
-					errors = true
-					logger.Error("Library '%s' not found. %s", library.Name, library.Help)
-				} else {
-					logger.Green("Library '%s' installed.", library.Name)
-				}
-			default:
-				return false, RequestSupportForDistribution(distroInfo, library.Name)
+			installed, err := libraryChecker(library.Name)
+			if err != nil {
+				return false, err
+			}
+			if !installed {
+				errors = true
+				logger.Error("Library '%s' not found. %s", library.Name, library.Help)
+			} else {
+				logger.Green("Library '%s' installed.", library.Name)
 			}
 		}
 	}

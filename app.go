@@ -1,7 +1,18 @@
 package wails
 
 import (
+	"os"
+	"syscall"
+
+	"github.com/syossan27/tebata"
 	"github.com/wailsapp/wails/cmd"
+	"github.com/wailsapp/wails/lib/binding"
+	"github.com/wailsapp/wails/lib/event"
+	"github.com/wailsapp/wails/lib/interfaces"
+	"github.com/wailsapp/wails/lib/ipc"
+	"github.com/wailsapp/wails/lib/logger"
+	"github.com/wailsapp/wails/lib/renderer"
+	wailsruntime "github.com/wailsapp/wails/runtime"
 )
 
 // -------------------------------- Compile time Flags ------------------------------
@@ -9,19 +20,29 @@ import (
 // BuildMode indicates what mode we are in
 var BuildMode = cmd.BuildModeProd
 
+// Runtime is the Go Runtime struct
+type Runtime = wailsruntime.Runtime
+
+// Store is a state store used for syncing with
+// the front end
+type Store = wailsruntime.Store
+
+// CustomLogger is a specialised logger
+type CustomLogger = logger.CustomLogger
+
 // ----------------------------------------------------------------------------------
 
 // App defines the main application struct
 type App struct {
-	config         *AppConfig      // The Application configuration object
-	cli            *cmd.Cli        // In debug mode, we have a cli
-	renderer       Renderer        // The renderer is what we will render the app to
-	logLevel       string          // The log level of the app
-	ipc            *ipcManager     // Handles the IPC calls
-	log            *CustomLogger   // Logger
-	bindingManager *bindingManager // Handles binding of Go code to renderer
-	eventManager   *eventManager   // Handles all the events
-	runtime        *Runtime        // The runtime object for registered structs
+	config         *AppConfig                // The Application configuration object
+	cli            *cmd.Cli                  // In debug mode, we have a cli
+	renderer       interfaces.Renderer       // The renderer is what we will render the app to
+	logLevel       string                    // The log level of the app
+	ipc            interfaces.IPCManager     // Handles the IPC calls
+	log            *logger.CustomLogger      // Logger
+	bindingManager interfaces.BindingManager // Handles binding of Go code to renderer
+	eventManager   interfaces.EventManager   // Handles all the events
+	runtime        interfaces.Runtime        // The runtime object for registered structs
 }
 
 // CreateApp creates the application window with the given configuration
@@ -33,15 +54,15 @@ func CreateApp(optionalConfig ...*AppConfig) *App {
 	}
 
 	result := &App{
-		logLevel:       "info",
-		renderer:       &webViewRenderer{},
-		ipc:            newIPCManager(),
-		bindingManager: newBindingManager(),
-		eventManager:   newEventManager(),
-		log:            newCustomLogger("App"),
+		logLevel:       "debug",
+		renderer:       renderer.NewWebView(),
+		ipc:            ipc.NewManager(),
+		bindingManager: binding.NewManager(),
+		eventManager:   event.NewManager(),
+		log:            logger.NewCustomLogger("App"),
 	}
 
-	appconfig, err := newAppConfig(userConfig)
+	appconfig, err := newConfig(userConfig)
 	if err != nil {
 		result.log.Fatalf("Cannot use custom HTML: %s", err.Error())
 	}
@@ -55,11 +76,15 @@ func CreateApp(optionalConfig ...*AppConfig) *App {
 		result.config.DisableInspector = true
 	}
 
+	// Platform specific init
+	platformInit()
+
 	return result
 }
 
 // Run the app
 func (a *App) Run() error {
+
 	if BuildMode != cmd.BuildModeProd {
 		return a.cli.Run()
 	}
@@ -75,14 +100,14 @@ func (a *App) Run() error {
 func (a *App) start() error {
 
 	// Set the log level
-	setLogLevel(a.logLevel)
+	logger.SetLogLevel(a.logLevel)
 
 	// Log starup
 	a.log.Info("Starting")
 
-	// Check if we are to run in headless mode
+	// Check if we are to run in bridge mode
 	if BuildMode == cmd.BuildModeBridge {
-		a.renderer = &Headless{}
+		a.renderer = renderer.NewBridge()
 	}
 
 	// Initialise the renderer
@@ -91,27 +116,59 @@ func (a *App) start() error {
 		return err
 	}
 
+	// Start signal handler
+	t := tebata.New(os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL)
+	t.Reserve(func() {
+		a.log.Debug("SIGNAL CAUGHT! Starting Shutdown")
+		a.renderer.Close()
+	})
+
 	// Start event manager and give it our renderer
-	a.eventManager.start(a.renderer)
+	a.eventManager.Start(a.renderer)
 
 	// Start the IPC Manager and give it the event manager and binding manager
-	a.ipc.start(a.eventManager, a.bindingManager)
+	a.ipc.Start(a.eventManager, a.bindingManager)
 
 	// Create the runtime
-	a.runtime = newRuntime(a.eventManager, a.renderer)
+	a.runtime = wailsruntime.NewRuntime(a.eventManager, a.renderer)
 
 	// Start binding manager and give it our renderer
-	err = a.bindingManager.start(a.renderer, a.runtime)
+	err = a.bindingManager.Start(a.renderer, a.runtime)
 	if err != nil {
 		return err
 	}
 
+	// Defer the shutdown
+	defer a.shutdown()
+
 	// Run the renderer
-	return a.renderer.Run()
+	err = a.renderer.Run()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// shutdown the app
+func (a *App) shutdown() {
+	// Make sure this is only called once
+	a.log.Debug("Shutting down")
+
+	// Shutdown Binding Manager
+	a.bindingManager.Shutdown()
+
+	// Shutdown IPC Manager
+	a.ipc.Shutdown()
+
+	// Shutdown Event Manager
+	a.eventManager.Shutdown()
+
+	a.log.Debug("Cleanly Shutdown")
 }
 
 // Bind allows the user to bind the given object
 // with the application
 func (a *App) Bind(object interface{}) {
-	a.bindingManager.bind(object)
+	a.bindingManager.Bind(object)
 }

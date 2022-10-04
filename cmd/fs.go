@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/leaanthony/slicer"
 )
@@ -47,12 +47,28 @@ func (fs *FSHelper) FileExists(path string) bool {
 	return fi.Mode().IsRegular()
 }
 
+// FindFile returns the first occurrence of match inside path.
+func (fs *FSHelper) FindFile(path, match string) (string, error) {
+	files, err := os.ReadDir(path)
+	if err != nil {
+		return "", err
+	}
+
+	for _, f := range files {
+		if !f.IsDir() && strings.Contains(f.Name(), match) {
+			return f.Name(), nil
+		}
+	}
+
+	return "", fmt.Errorf("file not found")
+}
+
 // CreateFile creates a file at the given filename location with the contents
 // set to the given data. It will create intermediary directories if needed.
 func (fs *FSHelper) CreateFile(filename string, data []byte) error {
 	// Ensure directory exists
 	fs.MkDirs(filepath.Dir(filename))
-	return ioutil.WriteFile(filename, data, 0644)
+	return os.WriteFile(filename, data, 0644)
 }
 
 // MkDirs creates the given nested directories.
@@ -100,10 +116,10 @@ func (fs *FSHelper) RemoveFile(filename string) error {
 }
 
 // RemoveFiles removes the given filenames
-func (fs *FSHelper) RemoveFiles(files []string) error {
+func (fs *FSHelper) RemoveFiles(files []string, continueOnError bool) error {
 	for _, filename := range files {
 		err := os.Remove(filename)
-		if err != nil {
+		if err != nil && !continueOnError {
 			return err
 		}
 	}
@@ -136,7 +152,7 @@ func (fs *FSHelper) LocalDir(dir string) (*Dir, error) {
 func (d *Dir) GetSubdirs() (map[string]string, error) {
 
 	// Read in the directory information
-	fileInfo, err := ioutil.ReadDir(d.fullPath)
+	fileInfo, err := os.ReadDir(d.fullPath)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +204,7 @@ func (fs *FSHelper) SaveAsJSON(data interface{}, filename string) error {
 	e.SetIndent("", "  ")
 	e.Encode(data)
 
-	err := ioutil.WriteFile(filename, buf.Bytes(), 0755)
+	err := os.WriteFile(filename, buf.Bytes(), 0755)
 	if err != nil {
 		return err
 	}
@@ -204,7 +220,7 @@ func (fs *FSHelper) LoadAsString(filename string) (string, error) {
 
 // LoadAsBytes returns the contents of the file as a byte slice
 func (fs *FSHelper) LoadAsBytes(filename string) ([]byte, error) {
-	return ioutil.ReadFile(filename)
+	return os.ReadFile(filename)
 }
 
 // FileMD5 returns the md5sum of the given file

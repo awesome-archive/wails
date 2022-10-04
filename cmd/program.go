@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -11,14 +12,22 @@ import (
 
 // ProgramHelper - Utility functions around installed applications
 type ProgramHelper struct {
-	shell *ShellHelper
+	shell   *ShellHelper
+	verbose bool
 }
 
 // NewProgramHelper - Creates a new ProgramHelper
-func NewProgramHelper() *ProgramHelper {
-	return &ProgramHelper{
+func NewProgramHelper(verbose ...bool) *ProgramHelper {
+	result := &ProgramHelper{
 		shell: NewShellHelper(),
 	}
+	if len(verbose) > 0 {
+		result.verbose = verbose[0]
+		if result.verbose {
+			result.shell.SetVerbose()
+		}
+	}
+	return result
 }
 
 // IsInstalled tries to determine if the given binary name is installed
@@ -29,8 +38,9 @@ func (p *ProgramHelper) IsInstalled(programName string) bool {
 
 // Program - A struct to define an installed application/binary
 type Program struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	verbose bool
 }
 
 // FindProgram attempts to find the given program on the system.FindProgram
@@ -45,8 +55,9 @@ func (p *ProgramHelper) FindProgram(programName string) *Program {
 		return nil
 	}
 	return &Program{
-		Name: programName,
-		Path: path,
+		Name:    programName,
+		Path:    path,
+		verbose: p.verbose,
 	}
 }
 
@@ -63,12 +74,18 @@ func (p *Program) Run(vars ...string) (stdout, stderr string, exitCode int, err 
 		return "", "", 1, err
 	}
 	cmd := exec.Command(command, vars...)
-	var stdo, stde bytes.Buffer
-	cmd.Stdout = &stdo
-	cmd.Stderr = &stde
-	err = cmd.Run()
-	stdout = string(stdo.Bytes())
-	stderr = string(stde.Bytes())
+	if !p.verbose {
+		var stdo, stde bytes.Buffer
+		cmd.Stdout = &stdo
+		cmd.Stderr = &stde
+		err = cmd.Run()
+		stdout = string(stdo.Bytes())
+		stderr = string(stde.Bytes())
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err = cmd.Run()
+	}
 
 	// https://stackoverflow.com/questions/10385551/get-exit-code-go
 	if err != nil {
@@ -100,6 +117,19 @@ func (p *ProgramHelper) InstallGoPackage(packageName string) error {
 	return err
 }
 
+// InstallNPMPackage installs the given npm package
+func (p *ProgramHelper) InstallNPMPackage(packageName string, save bool) error {
+	args := strings.Split("install "+packageName, " ")
+	if save {
+		args = append(args, "--save")
+	}
+	_, stderr, err := p.shell.Run("npm", args...)
+	if err != nil {
+		fmt.Println(stderr)
+	}
+	return err
+}
+
 // RunCommand runs the given command
 func (p *ProgramHelper) RunCommand(command string) error {
 	args := strings.Split(command, " ")
@@ -108,23 +138,25 @@ func (p *ProgramHelper) RunCommand(command string) error {
 
 // RunCommandArray runs the command specified in the array
 func (p *ProgramHelper) RunCommandArray(args []string, dir ...string) error {
-	program := args[0]
+	programCommand := args[0]
 	// TODO: Run FindProgram here and get the full path to the exe
-	program, err := exec.LookPath(program)
+	program, err := exec.LookPath(programCommand)
 	if err != nil {
-		fmt.Printf("ERROR: Looks like '%s' isn't installed. Please install and try again.", program)
+		fmt.Printf("ERROR: Looks like '%s' isn't installed. Please install and try again.", programCommand)
 		return err
 	}
+
 	args = args[1:]
 	var stderr string
-	// fmt.Printf("RunCommandArray = %s %+v\n", program, args)
+	var stdout string
 	if len(dir) > 0 {
-		_, stderr, err = p.shell.RunInDirectory(dir[0], program, args...)
+		stdout, stderr, err = p.shell.RunInDirectory(dir[0], program, args...)
 	} else {
-		_, stderr, err = p.shell.Run(program, args...)
+		stdout, stderr, err = p.shell.Run(program, args...)
 	}
 	if err != nil {
 		fmt.Println(stderr)
+		fmt.Println(stdout)
 	}
 	return err
 }
